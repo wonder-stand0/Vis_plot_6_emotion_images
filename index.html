@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>六種人臉情緒圖像視覺化散佈圖</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.7.0/math.min.js"></script> <!-- 引入 Math.js -->
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        h1, h2 {
+            color: #333;
+            text-align: center;
+        }
+        .chart-container {
+            width: 90%;
+            max-width: 1000px;
+            height: 600px;
+            margin: 0 auto;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            width: auto;
+            height: auto;
+            padding: 10px;
+            font: 12px sans-serif;
+            background: lightsteelblue;
+            border: 0px;
+            border-radius: 8px;
+            pointer-events: none;
+            opacity: 0;
+            z-index: 10;
+        }
+        .tooltip img {
+            max-width: 150px;
+            max-height: 150px;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .controls label {
+            margin-right: 10px;
+        }
+        .description {
+            width: 90%;
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 15px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            line-height: 1.6;
+        }
+        .dot {
+            stroke: #fff;
+            stroke-width: 0.5px;
+        }
+        /* Placeholder for minimap styling */
+        .minimap {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: 120px;
+            border: 1px solid #ccc;
+            background-color: rgba(255,255,255,0.8);
+        }
+        .minimap .frame {
+            fill: none;
+            stroke: #888; /* 改為灰色 */
+            stroke-width: 1px;
+        }
+        /* 新增：用於並排統計圖和相似度分析的容器 */
+        .additional-info-row {
+            display: flex;
+            justify-content: space-around;
+            align-items: flex-start; /* 頂部對齊 */
+            width: 90%;
+            max-width: 1000px;
+            margin: 20px auto;
+            gap: 20px; /* 欄間距 */
+        }
+        .info-column { /* 通用欄樣式 */
+            flex: 1;
+            padding: 15px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            box-shadow: 0 0 5px rgba(0,0,0,0.05);
+            border-radius: 5px;
+        }
+        .info-column h2 {
+            text-align: center;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        #stats-chart-container svg { /* 確保SVG響應式 */
+            display: block;
+            margin: 0 auto;
+        }
+        #similarity-info {
+            min-height: 100px; /* 給予一些最小高度 */
+            background-color: #f9f9f9;
+            border: 1px solid #eee;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <h1>六種人臉情緒圖像視覺化散佈圖</h1>
+
+    <!-- 新增：CSV 檔案上傳按鈕 -->
+    <div style="text-align:center; margin:10px;">
+        <input type="file" id="csv-upload" accept=".csv">
+        <span style="color:#888; font-size:0.9em;">（請上傳 embeddings_2d.csv）</span>
+    </div>
+
+    <div class="chart-container">
+        <svg id="scatter-plot"></svg>
+        <div id="minimap-container" class="minimap">
+             <svg id="minimap-svg" width="100%" height="100%"></svg>
+        </div>
+    </div>
+    <div class="tooltip"></div>
+
+    <!-- 新的並排資訊區塊 -->
+    <div class="additional-info-row">
+        <div id="stats-column" class="info-column">
+            <div style="margin-bottom: 10px; text-align: center;"> 
+                <label>
+                    <input type="checkbox" id="heatmap-toggle" checked> <b>顯示熱度圖</b>
+                </label>
+            </div>
+            <h2>各類情緒標籤圖片數量統計</h2>
+            <div id="stats-chart-container"></div> <!-- 長條圖將繪製於此 -->
+        </div>
+        <div id="similarity-column" class="info-column">
+            <h2>相似度分析</h2>
+            <div id="similarity-info">
+                滑鼠移至資料點以查看相似度分析。
+            </div>
+        </div>
+    </div>
+
+    <div class="description">
+        <p><strong>提示：</strong>請用命令提示字元輸入「python run.py」來執行，而非直接點擊index.html。以開啟本地端伺服器、確保js能讀取csv資料。</p>
+        <h2>資料說明與圖表分析</h2>
+        <p>我選擇了kaggle上的 <a href="https://www.kaggle.com/datasets/yousefmohamed20/sentiment-images-classifier">6 Human Emotions for image classification</a> 這個資料集，總共有1200張不同的人臉照片，不均等分為anger憤怒、disgust厭惡、fear恐懼、happy高興、pain痛苦與sad悲傷六種情緒。</p>
+        <p>特徵提取的部份，經過比較後選擇目前社群最廣泛使用的開源DeepFace套件進行特徵提取，並使用其中的Facenet512模型，紀錄原始Softmax分數、最大情緒強度與情緒離散度，此外也提取了年齡、性別、及臉部三種特徵作為次要參數，以增加分群效果。最後將特徵項目從原始的512維截斷至128維，避免維度爆炸災難。</p>
+        <p>接著使用 UMAP 演算法將高維圖像嵌入特徵降至二維空間。圖中的每一個點代表一張原始圖片，點的顏色對應其情緒標籤。</p>
+        <p>前端設計中，加入了滾輪縮放/ 拖曳/ 小地圖的互動功能，以及情緒標籤篩選、原始圖片顯示與鄰近區域相似度分析三個功能。此外亦列出不同情緒的圖片數量供分析參考。</p>
+        
+        <h3>資料處理說明</h3>
+        <ul>
+            <li><strong>資料預處理：</strong>由於原始資料集較為雜亂，故我在特徵提取前先進行了預處理。包含排除非jpg與png格式、有兩個以上人臉/ 無法偵測人臉、以及相似度過高的圖片（此資料集中有許多重複的圖片用不同檔名命名）。詳細的預處理紀錄可參考feature_extraction_log.csv這份檔案。</li>
+            <li><strong>降維方式選擇：</strong>我比較了t-SNE、PCA、UMAP與ISOMAP四種降維方式的結果，在調整各項參數優化（包括t-SNE的perplexity、learning rate，與UMAP的min_dist、n_neighbors等）後選擇了效果較好的UMAP。詳細的比較可參考dimensionality_reduction_comparison.png這個檔案。</li>
+            <li><strong>資料分布解析：</strong>由於整體分群效果較為發散─即相同情緒的散布範圍很廣（原因詳後述），故並未使用常見的信賴橢圓，而採用熱度圖Heatmap進行視覺化的分佈解析。以便更清楚掌握資料分布的狀況。</li>
+        </ul>          
+        
+        <h3>各情緒預期與實際分群狀況</h3>
+        <p>預期中，相同情緒的圖片在降維後應聚集在相近的區域，形成明顯的群集。實際觀察圖表：</p>
+        <ul>
+            <li><strong>happy（高興）：</strong>紅色的點在圖中左下方形成明顯且緊密的群集，分布集中。理論上，「快樂」作為一種強烈的正面情緒，其特徵應該與其他負面情緒有較大差異，因此預期會有較好的分離度。圖中顯示「快樂」確實是相對最分明的一個群集。</li>
+            <li><strong>anger（憤怒）：</strong>藍色的點雖然分布略為分散，但大致集中於畫面下方與中間等區塊。顯示生氣表情有一定的特徵區分度。</li>
+            <li><strong>disgust（厭惡）：</strong>橘色的點分布較為分散，且與「anger」的重疊度頗高。預期「憤怒」和「厭惡」這兩種負面情緒在面部表情上（如皺眉、撇嘴等）可能共享一些特徵，因此預期它們的群集也會比較靠近。</li>
+            <li><strong>fear（恐懼）：</strong>綠色的點主要分布於畫面的右方及上方，但整體分布仍廣。顯示恐懼與其他負面情緒在臉部特徵上有相似性，分群效果較弱。常理而言，「恐懼」的表達有時較為細微，或者其特徵可能與其他負面情緒相似，導致其在降維空間中不易形成獨立且集中的群集，這是一個常見的挑戰。</li>
+            <li><strong>pain（痛苦）：</strong>紫色的點分布於多個區域，部分與「sad」和「fear」混合，顯示痛苦表情在嵌入空間中較難與其他負向情緒完全區分。</li>
+            <li><strong>sad（悲傷）：</strong>棕色的點分布最為廣泛，與「fear」、「pain」等負向情緒有大量重疊，僅部分區域有較明顯的聚集，這反映出悲傷表情的多樣性及與其他負向情緒的相似性。</li>
+        </ul>
+        <p>整體而言，「happy」的分群效果最佳，與常理預期相符；「anger」次之；而「sad」、「fear」、「pain」、「disgust」等負向情緒則有較多重疊與混合，顯示這些情緒在臉部特徵上本就較難完全區分。圖中也可見少數離群點，可能來自特徵特殊或標註有誤的圖片。這些分布現象符合實際人臉情緒辨識的挑戰與特性。</p>
+
+
+        <h3>此圖表的用途</h3>
+        <p>本視覺化圖表可應用於多個層面，以輔助人臉情緒分析和模型開發：</p>
+        <ul>
+            <li><strong>人臉情緒辨識的挑戰：</strong>由於多數負向情緒（如悲傷、恐懼、痛苦、厭惡）在面部表徵上具有相似性，分佈區域重疊，使得單純基於向量嵌入的分群難以完全區分，凸顯實務中面部情緒分類的複雜度。</li>
+            <li><strong>特徵探索與非監督式學習效益：</strong>透過 UMAP 嵌入並結合熱度圖，可以直觀地觀察高維特徵在二維空間的分佈趨勢。這有助於在未使用標籤的情況下發掘潛在模式、驗證資料是否天然成群，進而為後續分群（如 K-Means、DBSCAN）和參數調整提供依據。</li>
+            <li><strong>異常樣本檢測：</strong>遠離主群集的離群點往往代表標註錯誤或極端表情，透過可視化能快速鎖定這些樣本，輔助人工審查與資料清理，提高訓練集品質。</li>
+            <li><strong>模型比較與調優：</strong>可將不同降維演算法或相同演算法不同參數的嵌入結果並行比較，觀察群聚結構的穩定性與區分度，支持最佳演算法選擇與超參數調優。</li>
+            <li><strong>溝通與報告：</strong>將高維嵌入結構以二維圖形呈現，可有效說明情緒分類模型的表現與資料特性，便於向非技術人員或研究夥伴展示研究成果。</li>
+        </ul>
+    
+         
+
+    </div>
+
+    <script>
+        const chartContainer = document.querySelector('.chart-container');
+        const svg = d3.select("#scatter-plot")
+            .attr("width", chartContainer.clientWidth)
+            .attr("height", chartContainer.clientHeight);
+        
+        const margin = {top: 20, right: 30, bottom: 40, left: 50};
+        let width = chartContainer.clientWidth - margin.left - margin.right; // Changed from const to let
+        let height = chartContainer.clientHeight - margin.top - margin.bottom; // Changed from const to let
+
+        // 小地圖相關設定
+        const minimapContainer = d3.select("#minimap-container");
+        const minimapSVG = d3.select("#minimap-svg")
+            .attr("width", 200)
+            .attr("height", 120); // 明確設定像素寬高
+        minimapContainer.style("width", "200px").style("height", "120px"); // 明確設定容器寬高
+        // 先宣告 minimapViewport 為 null，然後 append rect 並賦值
+        let minimapViewport = null;
+        minimapViewport = minimapSVG.append("rect")
+            .attr("class", "frame")
+            .attr("fill", "none")
+            .attr("stroke", "#888") // 改為灰色
+            .attr("stroke-width", 1);
+        const minimapWidth = 200; // 直接指定
+        const minimapHeight = 120; // 直接指定
+        const minimapMargin = {top: 5, right: 5, bottom: 5, left: 5}; // 調整邊距
+        const minimapInnerWidth = minimapWidth - minimapMargin.left - minimapMargin.right;
+        const minimapInnerHeight = minimapHeight - minimapMargin.top - minimapMargin.bottom;
+
+        let xScale, yScale; 
+        // let minimapViewport; // Declare minimapViewport globally - already declared above
+
+        // 全域宣告 zoom，只建立一次
+        let zoom = d3.zoom()
+            .scaleExtent([0.5, 20])
+            .extent([[0, 0], [width, height]])
+            .on("zoom", (event) => {
+                const new_xScale = event.transform.rescaleX(xScale);
+                const new_yScale = event.transform.rescaleY(yScale);
+
+                g.selectAll(".dot")
+                    .attr('cx', d => new_xScale(d.x)) // Restored cx update
+                    .attr('cy', d => new_yScale(d.y)); 
+                g.select(".x-axis").call(d3.axisBottom(new_xScale));
+                g.select(".y-axis").call(d3.axisLeft(new_yScale));
+                updateMinimapViewbox(new_xScale, new_yScale);
+                
+                // Update heatmap rectangles if visible
+                if (heatmapVisible) {
+                    g.selectAll(".heatmap-layer rect")
+                        .attr("x", d => new_xScale(d.x0))
+                        .attr("y", d => new_yScale(d.y1)) // y1 is the top edge in screen coordinates
+                        .attr("width", d => new_xScale(d.x1) - new_xScale(d.x0))
+                        .attr("height", d => new_yScale(d.y0) - new_yScale(d.y1)); // height
+                }
+            });
+
+        const g = svg.append("g")
+            .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+        const tooltip = d3.select(".tooltip");
+        const similarityInfoDiv = d3.select("#similarity-info"); // 相似度資訊顯示區
+
+        // 顏色比例尺
+        const color = d3.scaleOrdinal(d3.schemeCategory10);
+        // const labelFilter = d3.select("#labelFilter"); // 舊的篩選器，不再需要
+
+        let allData = []; // 用於儲存所有載入的資料
+        let activeLabels = new Set(); // 用於追蹤目前勾選的標籤
+        let heatmapVisible = true; // 追蹤熱力圖可見性
+
+        const heatmapToggle = d3.select("#heatmap-toggle");
+        heatmapToggle.on("change", function() {
+            heatmapVisible = this.checked;
+            updateChart(); // 重繪圖表以顯示/隱藏熱力圖
+        });
+
+        // ====== 新增：CSV 檔案上傳功能 ======
+        const csvUploadInput = document.getElementById("csv-upload");
+        csvUploadInput.addEventListener("change", function(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const csvText = e.target.result;
+                const data = d3.csvParse(csvText);
+
+                allData = data;
+                data.forEach(d => {
+                    d.x = +d.x;
+                    d.y = +d.y;
+                    d.filename = d.filename || "未知檔案";
+                    d.label = d.label || "未知標籤";
+                });
+
+                activeLabels = new Set(data.map(d => d.label));
+                updateChart();
+                svg.call(zoom.transform, d3.zoomIdentity);
+                createLegend(allData);
+                createStatsBarChart(allData);
+                initializeMinimap(allData);
+                adjustBlockHeights();
+                if (svg.node().__zoom) {
+                    updateMinimapViewbox(xScale, yScale);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // ====== 移除自動載入資料功能 ======
+        // async function loadData() { ... }
+        // loadData(); // 不再自動載入，改為上傳後載入
+
+        // 新增文字自動換行輔助函式
+        function wrapText(text, maxWidth) {
+            text.each(function() {
+                let text = d3.select(this),
+                    words = text.text().split(/\\s+/).reverse(),
+                    word,
+                    line = [],
+                    lineNumber = 0,
+                    lineHeight = 1.1, // ems
+                    x = text.attr("x"),
+                    y = text.attr("y"),
+                    dy = 0, // parseFloat(text.attr("dy")),
+                    tspan = text.text(null)
+                                .append("tspan")
+                                .attr("x", x)
+                                .attr("y", y)
+                                .attr("dy", dy + "em");
+                while (word = words.pop()) {
+                    line.push(word);
+                    tspan.text(line.join(" "));
+                    if (tspan.node().getComputedTextLength() > maxWidth) {
+                        line.pop();
+                        tspan.text(line.join(" "));
+                        line = [word];
+                        tspan = text.append("tspan")
+                                    .attr("x", x)
+                                    .attr("y", y)
+                                    .attr("dy", ++lineNumber * lineHeight + dy + "em")
+                                    .text(word);
+                    }
+                }
+            });
+        }
+
+        // 新增創建圖例的函式 (已修改為可勾選)
+        function createLegend(data) {
+            const legendItemHeight = 25; 
+            const legendMarkerRadius = 7;
+            const legendTextOffset = 10;
+            const checkboxSize = 16;
+
+            const legendLabels = [...new Set(data.map(d => d.label))].sort();
+
+            svg.selectAll(".legend").remove();
+
+            const legend = svg.append("g")
+                .attr("class", "legend")
+                .attr("transform", `translate(${width + margin.left - 120},${margin.top})`); // 調整偏移量以容納 checkbox
+
+            const legendItems = legend.selectAll(".legend-item")
+                .data(legendLabels)
+                .enter()
+                .append("g")
+                .attr("class", "legend-item")
+                .attr("transform", (d, i) => `translate(0, ${i * legendItemHeight})`)
+                .style("cursor", "pointer") // 讓圖例項目看起來可點擊
+                .on("click", function(event, d_label) {
+                    // 切換標籤的選取狀態
+                    if (activeLabels.has(d_label)) {
+                        activeLabels.delete(d_label);
+                    } else {
+                        activeLabels.add(d_label);
+                    }
+                    // 更新 checkbox 的視覺狀態
+                    d3.select(this).select("rect.checkbox")
+                        .style("fill", activeLabels.has(d_label) ? "#666" : "#fff");
+                    d3.select(this).select("text.checkbox-tick")
+                    d3.select(this).select("text.checkbox-tick")
+                        .style("display", activeLabels.has(d_label) ? "inline" : "none");
+                    
+                    updateChart(); // 更新圖表
+                });
+
+            // 添加 Checkbox 的方框
+            legendItems.append("rect")
+                .attr("class", "checkbox")
+                .attr("x", 0)
+                .attr("y", (legendItemHeight - checkboxSize) / 2 - 2)
+                .attr("width", checkboxSize)
+                .attr("height", checkboxSize)
+                .style("fill", d => activeLabels.has(d) ? "#666" : "#fff") // 根據是否 active 決定初始填充色
+                .style("stroke", "#333")
+                .style("stroke-width", "1px");
+            
+            // 添加 Checkbox 的打勾符號 (預設隱藏，選中時顯示)
+            legendItems.append("text")
+                .attr("class", "checkbox-tick")
+                .attr("x", checkboxSize / 2)
+                .attr("y", (legendItemHeight + checkboxSize) / 2 - 5) // 微調Y軸使勾號居中
+                .attr("text-anchor", "middle")
+                .style("font-size", "14px")
+                .style("fill", "white")
+                .style("pointer-events", "none") // 避免勾號攔截點擊事件
+                .style("display", d => activeLabels.has(d) ? "inline" : "none") // 根據是否 active 決定初始顯示
+                .text("✓");
+
+            legendItems.append("circle")
+                .attr("r", legendMarkerRadius)
+                .attr("cx", checkboxSize + legendTextOffset + legendMarkerRadius)
+                .attr("cy", legendItemHeight / 2 -1 ) // 調整圓心使視覺上對齊文字
+                .style("fill", d => color(d));
+
+            legendItems.append("text")
+                .attr("x", checkboxSize + legendTextOffset + legendMarkerRadius * 2 + legendTextOffset / 2)
+                .attr("y", legendItemHeight / 2)
+                .text(d => d)
+                .style("font-size", "12px")
+                .attr("alignment-baseline", "middle");
+        }
+
+        function updateChart() { // 移除 selectedLabel 參數
+            g.selectAll("*").remove();
+
+            // 根據 activeLabels 篩選資料
+            let filteredData = allData.filter(d => activeLabels.has(d.label));
+
+            if (activeLabels.size === 0) { // 如果沒有選取任何標籤
+                filteredData = []; // 則顯示空資料
+            }
+
+            if (filteredData.length === 0) {
+                g.append("text")
+                    .attr("x", width / 2)
+                    .attr("y", height / 2)
+                    .attr("text-anchor", "middle")
+                    .text(activeLabels.size === 0 ? "請選擇至少一個標籤以顯示資料。" : `沒有標籤為 "${selectedLabel}" 的資料。`);
+                similarityInfoDiv.html("滑鼠移至資料點以查看相似度分析。"); // Reset similarity info
+                adjustBlockHeights(); // Adjust heights when no data
+                return;
+            }
+            
+            const xExtent = d3.extent(filteredData, d => d.x);
+            const yExtent = d3.extent(filteredData, d => d.y);
+
+            // 考慮資料可能非常集中，給予一些 padding
+            const xPadding = (xExtent[1] - xExtent[0]) * 0.1 || 1;
+            const yPadding = (yExtent[1] - yExtent[0]) * 0.1 || 1;
+
+            // Assign to the globally scoped xScale and yScale
+            xScale = d3.scaleLinear()
+                .domain([xExtent[0] - xPadding, xExtent[1] + xPadding])
+                .range([0, width]);
+
+            yScale = d3.scaleLinear()
+                .domain([yExtent[0] - yPadding, yExtent[1] + yPadding])
+                .range([height, 0]);
+
+            // 顯示軸線但不顯示刻度、數字、名稱
+            const xAxis = d3.axisBottom(xScale)
+                .tickFormat("")
+                .tickSize(0)
+                .tickSizeOuter(0)
+                .ticks(0); // 不顯示刻度
+            const yAxis = d3.axisLeft(yScale)
+                .tickFormat("")
+                .tickSize(0)
+                .tickSizeOuter(0)
+                .ticks(0); // 不顯示刻度
+
+            g.append("g")
+                .attr("class", "x-axis")
+                .attr("transform", "translate(0," + height + ")")
+                .call(xAxis);
+
+            g.append("g")
+                .attr("class", "y-axis")
+                .call(yAxis);
+
+            // 清除舊的橢圓 (如果有的話)
+            g.selectAll(".confidence-ellipse").remove();
+
+            // 不要 append x-axis/y-axis 任何內容
+            // dots, ellipses, legend, minimap 等繪製照常
+            // 繪製資料點，確保點在軸線下方
+            // 建立一個 clipPath，讓資料點只顯示在主圖區域內
+            svg.select("#main-clip-path").remove();
+            svg.append("clipPath")
+                .attr("id", "main-clip-path")
+                .append("rect")
+                .attr("x", 0)
+                .attr("y", 0)
+                .attr("width", width)
+                .attr("height", height);
+
+            // dots-layer 套用 clip-path
+            const dots = g.append("g")
+                .attr("class", "dots-layer")
+                .attr("clip-path", "url(#main-clip-path)")
+                .selectAll("circle")
+                .data(filteredData)
+                .enter().append("circle")
+                .attr("class", "dot")
+                .attr("cx", d => xScale(d.x))
+                .attr("cy", d => yScale(d.y))
+                .attr("r", 5)
+                .style("fill", d => color(d.label))
+                .on("mouseover", function(event, d) {
+                    tooltip.transition()
+                        .duration(200)
+                        .style("opacity", .9);
+                    tooltip.html('<img src="dataset/' + d.label + '/' + d.filename + '" alt="Image preview"><br>' + d.filename)
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                    d3.select(this)
+                        .attr("r", 8)
+                        .style("stroke", "black")
+                        .style("stroke-width", 2);
+                    displaySimilarityInfo(d, filteredData, xScale, yScale);
+                })
+                .on("mouseout", function(d) {
+                    tooltip.transition()
+                        .duration(500)
+                        .style("opacity", 0);
+                    d3.select(this)
+                        .attr("r", 5)
+                        .style("stroke", "none");
+                })
+                .on("click", function(event, d) {
+                    console.log("點擊的資料點: ", d);
+                });
+            
+            // 繪製熱力圖 (如果啟用)
+            if (heatmapVisible && filteredData.length > 0) {
+                drawHeatmap(filteredData, xScale, yScale);
+            }
+            // 移除滑鼠移開事件中的相似度清除，改為點擊時觸發，或滑鼠移出主繪圖區域時清除
+            svg.on("mouseout", function(event) {
+                // 檢查滑鼠是否真的移出了SVG範圍，而不是移到子元素上
+                if (event.relatedTarget && (event.relatedTarget.nodeName === "svg" || event.relatedTarget.closest("svg#scatter-plot") === null) ) {
+                    similarityInfoDiv.html("滑鼠移至資料點以查看相似度分析。");
+                }
+            });
+
+
+            // 縮放功能
+            svg.call(zoom)
+               .on("dblclick.zoom", null); 
+        }
+
+        // 初始化小地圖
+        let minimapXScale, minimapYScale; 
+        // const minimapViewport = minimapSVG.append("rect") // Moved declaration to global, append in init
+        //     .attr("class", "frame") 
+        //     .attr("fill", "none")
+        //     .attr("stroke-width", 1);
+
+        function initializeMinimap(data) {
+            minimapSVG.selectAll(".minimap-dots-container").remove(); // 只清除點，不清除紅框
+            minimapSVG.selectAll(".heatmap-layer").remove(); // 清除可能存在的舊熱力圖層
+
+            minimapSVG.append("g") // Dots container first
+                .attr("class", "minimap-dots-container");
+
+            // 不再重建 minimapViewport
+
+            if (!data || data.length === 0) return;
+
+            const allXValues = data.map(d => d.x);
+            const allYValues = data.map(d => d.y);
+            const xDomain = d3.extent(allXValues);
+            const yDomain = d3.extent(allYValues);
+            
+            // 給予一些 padding
+            const xPadding = (xDomain[1] - xDomain[0]) * 0.05 || 0.5;
+            const yPadding = (yDomain[1] - yDomain[0]) * 0.05 || 0.5;
+
+            minimapXScale = d3.scaleLinear()
+                .domain([xDomain[0] - xPadding, xDomain[1] + xPadding])
+                .range([minimapMargin.left, minimapInnerWidth - minimapMargin.right]);
+            
+            minimapYScale = d3.scaleLinear()
+                .domain([yDomain[0] - yPadding, yDomain[1] + yPadding])
+                .range([minimapInnerHeight - minimapMargin.bottom, minimapMargin.top]); // Y軸反轉
+
+            updateMinimapData(data); // 初始繪製所有點
+            // 初始設定小地圖視窗 (假設未縮放)
+            if (xScale && yScale && svg.node().__zoom) { // 確保主圖的 scale 和 zoom 都已初始化
+                 updateMinimapViewbox(xScale, yScale);
+            }
+        }
+
+        function updateMinimapData(currentVisibleData) {
+            // 在小地圖上繪製代表目前主圖表可見資料的點
+            // 為了效能，可以只繪製 allData，或者根據 currentVisibleData 調整樣式
+            // 此處簡化為繪製 allData 的點，顏色與主圖一致
+            const minimapDotsContainer = minimapSVG.select(".minimap-dots-container");
+            minimapDotsContainer.selectAll(".minimap-dot").remove(); // 清除舊點
+
+            minimapDotsContainer.selectAll(".minimap-dot")
+                .data(allData, d => d.filename) // 使用 allData 繪製背景
+                .enter()
+                .append("circle")
+                .attr("class", "minimap-dot")
+                .attr("cx", d => minimapXScale(d.x))
+                .attr("cy", d => minimapYScale(d.y))
+                .attr("r", 1.5) // 小地圖上的點更小
+                .style("fill", d => color(d.label))
+                .style("opacity", d => activeLabels.has(d.label) ? 0.7 : 0.1); 
+        }
+        
+        // 修改 updateMinimapViewbox 接收 newXScale, newYScale
+        function updateMinimapViewbox(newXScale, newYScale) {
+            if (!minimapXScale || !minimapYScale || !newXScale || !newYScale) return;
+            const [dataXMin, dataXMax] = newXScale.domain();
+            const [dataYMin, dataYMax] = newYScale.domain();
+            // Ensure domain values are valid numbers before proceeding
+            if (typeof dataXMin !== 'number' || typeof dataXMax !== 'number' || 
+                typeof dataYMin !== 'number' || typeof dataYMax !== 'number' ||
+                isNaN(dataXMin) || isNaN(dataXMax) || isNaN(dataYMin) || isNaN(dataYMax)) {
+                // console.warn("Invalid domain values for minimap viewbox update:", newXScale.domain(), newYScale.domain());
+                return;
+            }
+            const xDomain = minimapXScale.domain();
+            const yDomain = minimapYScale.domain();
+            const clippedXMin = Math.max(xDomain[0], Math.min(xDomain[1], dataXMin));
+            const clippedXMax = Math.max(xDomain[0], Math.min(xDomain[1], dataXMax));
+            const clippedYMin = Math.max(yDomain[0], Math.min(yDomain[1], dataYMin));
+            const clippedYMax = Math.max(yDomain[0], Math.min(yDomain[1], dataYMax));
+            const minimapViewX = minimapXScale(clippedXMin);
+            const minimapViewY = minimapYScale(clippedYMax); // 注意Y軸反轉
+            const minimapViewWidth = Math.abs(minimapXScale(clippedXMax) - minimapViewX);
+            const minimapViewHeight = Math.abs(minimapYScale(clippedYMin) - minimapViewY);
+            minimapViewport
+                .attr("x", minimapViewX)
+                .attr("y", minimapViewY)
+                .attr("width", minimapViewWidth)
+                .attr("height", minimapViewHeight);
+        }
+
+
+        // 新增：繪製熱力圖的函式
+        function drawHeatmap(data, currentXScale, currentYScale) {
+            g.selectAll(".heatmap-layer").remove(); // 清除舊的熱力圖
+
+            if (!data || data.length === 0) {
+                return;
+            }
+
+            const heatmapLayer = g.append("g")
+                .attr("class", "heatmap-layer")
+                .style("opacity", 0.2)
+                .style("pointer-events", "none") // Allow mouse events to pass through
+                .attr("clip-path", "url(#main-clip-path)"); 
+
+            // 熱力圖參數
+            const heatmapResolution = 20; // 將繪圖區域劃分為 20x20 的格子
+            
+            const bins = [];
+            const xThresholds = currentXScale.ticks(heatmapResolution); // Ascending data values for x-axis
+            const yThresholds = currentYScale.ticks(heatmapResolution); // Ascending data values for y-axis
+
+            // Create 2D bins
+            // Ensure thresholds have at least 2 values to form bins
+            if (xThresholds.length < 2 || yThresholds.length < 2) {
+                // console.warn("Not enough ticks to create heatmap bins.");
+                return;
+            }
+
+            for (let i = 0; i < xThresholds.length - 1; i++) {
+                for (let j = 0; j < yThresholds.length - 1; j++) {
+                    bins.push({
+                        x0: xThresholds[i],       // min x data for bin
+                        x1: xThresholds[i+1],     // max x data for bin
+                        y0: yThresholds[j],       // min y data for bin (e.g., data value 10)
+                        y1: yThresholds[j+1],     // max y data for bin (e.g., data value 20)
+                        count: 0
+                    });
+                }
+            }
+            
+            // Populate bin counts
+            data.forEach(point => {
+                for (const bin of bins) {
+                    // Check if point is within the current bin [x0, x1) and [y0, y1)
+                    if (point.x >= bin.x0 && point.x < bin.x1 && 
+                        point.y >= bin.y0 && point.y < bin.y1) { // Corrected: point.y is between bin.y0 and bin.y1
+                        bin.count++;
+                        break; 
+                    }
+                }
+            });
+            
+            const maxCount = d3.max(bins, d => d.count);
+
+            // Removed the early return if maxCount is 0, to allow drawing gray bins.
+
+            const colorScale = d3.scaleSequential(d3.interpolateInferno) 
+                                 .domain([0, maxCount > 0 ? maxCount : 1]); // Adjust domain for maxCount = 0 case
+
+            heatmapLayer.selectAll("rect")
+                .data(bins) // Draw all bins, not just those with count > 0
+                .enter().append("rect")
+                .attr("x", d => currentXScale(d.x0))
+                // For y-scale (inverted): y1 is larger data value, maps to smaller screen y (top edge)
+                // y0 is smaller data value, maps to larger screen y (bottom edge)
+                .attr("y", d => currentYScale(d.y1)) // Top screen edge of the bin
+                .attr("width", d => currentXScale(d.x1) - currentXScale(d.x0))
+                // Height is (bottom screen y) - (top screen y)
+                .attr("height", d => currentYScale(d.y0) - currentYScale(d.y1)) // Positive height
+                .style("fill", d => {
+                    if (d.count === 0) {
+                        return "#000000"; // Changed gray color for empty bins
+                    }
+                    return colorScale(d.count); // Color from scale for non-empty bins
+                })
+                .style("stroke", "none");
+        }
+
+
+        // 創建統計長條圖的函式
+        function createStatsBarChart(data) {
+            const statsContainer = d3.select("#stats-chart-container"); // 選取新的容器
+            if (statsContainer.empty()) {
+                console.error("統計圖表容器 #stats-chart-container 未找到。");
+                return;
+            }
+            statsContainer.select("svg").remove(); // 清除舊的SVG (如果有)
+
+            const labelCounts = Array.from(d3.rollup(data, v => v.length, d => d.label), ([key, value]) => ({label: key, count: value}))
+                                   .sort((a, b) => d3.descending(a.count, b.count));
+
+            const barChartMargin = {top: 20, right: 20, bottom: 80, left: 50}; // 調整邊距
+            // 讓長條圖寬度自適應其容器，或設定一個合理的固定值
+            const containerWidth = d3.select("#stats-chart-container").node().getBoundingClientRect().width || 300;
+            const barChartWidth = containerWidth - barChartMargin.left - barChartMargin.right;
+            const barChartHeight = 220 - barChartMargin.top - barChartMargin.bottom; // 調整高度
+
+            const barChartSvg = statsContainer.append("svg")
+                .attr("width", barChartWidth + barChartMargin.left + barChartMargin.right)
+                .attr("height", barChartHeight + barChartMargin.top + barChartMargin.bottom)
+              .append("g")
+                .attr("transform", `translate(${barChartMargin.left},${barChartMargin.top})`);
+
+            const xStatsScale = d3.scaleBand()
+                .domain(labelCounts.map(d => d.label))
+                .range([0, barChartWidth])
+                .padding(0.1);
+
+            const yStatsScale = d3.scaleLinear()
+                .domain([0, d3.max(labelCounts, d => d.count)])
+                .nice()
+                .range([barChartHeight, 0]);
+
+            barChartSvg.append("g")
+                .attr("transform", `translate(0,${barChartHeight})`)
+                .call(d3.axisBottom(xStatsScale))
+                .selectAll("text")
+                .attr("transform", "rotate(-45)")
+                .style("text-anchor", "end");
+
+            barChartSvg.append("g")
+                .call(d3.axisLeft(yStatsScale));
+
+            barChartSvg.selectAll(".bar")
+                .data(labelCounts)
+                .enter().append("rect")
+                .attr("class", "bar")
+                .attr("x", d => xStatsScale(d.label))
+                .attr("y", d => yStatsScale(d.count))
+                .attr("width", xStatsScale.bandwidth())
+                .attr("height", d => barChartHeight - yStatsScale(d.count))
+                .attr("fill", d => color(d.label));
+
+            barChartSvg.selectAll(".bar-label")
+                .data(labelCounts)
+                .enter().append("text")
+                .attr("class", "bar-label")
+                .attr("x", d => xStatsScale(d.label) + xStatsScale.bandwidth() / 2)
+                .attr("y", d => yStatsScale(d.count) - 5)
+                .attr("text-anchor", "middle")
+                .style("font-size", "10px")
+                .text(d => d.count);
+            
+            // Y軸標題
+            barChartSvg.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("y", 0 - barChartMargin.left + 15)
+                .attr("x", 0 - (barChartHeight / 2))
+                .attr("dy", "1em")
+                .style("text-anchor", "middle")
+                .style("font-size", "12px")
+                .text("圖片數量");
+        }
+
+        // 相似度分析顯示函式 (基本框架)
+        function displaySimilarityInfo(hoveredDot, allVisibleDots, mainXScale, mainYScale) {
+            const radiusInPixels = 50; // 在螢幕像素單位上的半徑
+            const xDataRadius = Math.abs(mainXScale.invert(radiusInPixels) - mainXScale.invert(0));
+            const yDataRadius = Math.abs(mainYScale.invert(0) - mainYScale.invert(radiusInPixels)); // y軸通常是反的，但差異是正的
+            // 使用一個基於像素的固定數據"距離"概念，而不是嚴格的圓形區域轉換
+            // 這裡的 similarityRadius 是一個在數據單位下的"搜索閾值"
+            const similarityRadius = Math.sqrt(Math.pow(xDataRadius, 2) + Math.pow(yDataRadius, 2)) / 2; // 取對角線的一半作為一個大概的數據空間半徑
+
+            let nearbyPoints = [];
+            allVisibleDots.forEach(p => {
+                if (p === hoveredDot) return; // 不計算自己
+                const dist = Math.sqrt(Math.pow(p.x - hoveredDot.x, 2) + Math.pow(p.y - hoveredDot.y, 2));
+                if (dist < similarityRadius) {
+                    nearbyPoints.push(p);
+                }
+            });
+
+            if (nearbyPoints.length === 0) {
+                similarityInfoDiv.html(`滑鼠懸停點: ${hoveredDot.filename} (${hoveredDot.label})<br>在數據單位約 ${similarityRadius.toFixed(2)}的半徑內無其他可見點。`);
+                adjustBlockHeights(); // Adjust heights
+                return;
+            }
+
+            const sameLabelCount = nearbyPoints.filter(p => p.label === hoveredDot.label).length;
+            const proportion = (sameLabelCount / nearbyPoints.length * 100).toFixed(1);
+            
+            let htmlContent = `滑鼠懸停點: ${hoveredDot.filename} (${hoveredDot.label})<br>`;
+            htmlContent += `在數據單位約 ${similarityRadius.toFixed(2)} 的半徑內找到 ${nearbyPoints.length} 個鄰近點:<br>`;
+            htmlContent += ` - 相同標籤 (${hoveredDot.label}): ${sameLabelCount} 個 (${proportion}%)<br>`;
+            
+            const otherLabelsCount = {};
+            nearbyPoints.forEach(p => {
+                if (p.label !== hoveredDot.label) {
+                    otherLabelsCount[p.label] = (otherLabelsCount[p.label] || 0) + 1;
+                }
+            });
+
+            for (const label in otherLabelsCount) {
+                const count = otherLabelsCount[label];
+                const otherProportion = (count / nearbyPoints.length * 100).toFixed(1);
+                htmlContent += ` - 標籤 ${label}: ${count} 個 (${otherProportion}%)<br>`;
+            }
+            similarityInfoDiv.html(htmlContent);
+            adjustBlockHeights(); // Adjust heights after updating content
+        }
+
+        // 新增：調整區塊高度的函式
+        function adjustBlockHeights() {
+            const statsContainer = document.getElementById('stats-chart-container');
+            const similarityContainer = document.getElementById('similarity-info');
+
+            if (statsContainer && similarityContainer) {
+                // Reset heights to auto to get natural content height
+                statsContainer.style.height = 'auto';
+                similarityContainer.style.height = 'auto';
+
+                const statsHeight = statsContainer.offsetHeight;
+                const similarityHeight = similarityContainer.offsetHeight;
+                const maxHeight = Math.max(statsHeight, similarityHeight);
+
+                statsContainer.style.height = maxHeight + 'px';
+                similarityContainer.style.height = maxHeight + 'px';
+            }
+        }
+        // 監聽視窗大小變化，重新調整高度
+        window.addEventListener('resize', adjustBlockHeights);
+    </script>
+</body>
+</html>
