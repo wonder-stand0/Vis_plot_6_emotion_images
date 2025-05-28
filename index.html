@@ -124,12 +124,6 @@
 <body>
     <h1>六種人臉情緒圖像視覺化散佈圖</h1>
 
-    <!-- 新增：CSV 檔案上傳按鈕 -->
-    <div style="text-align:center; margin:10px;">
-        <input type="file" id="csv-upload" accept=".csv">
-        <span style="color:#888; font-size:0.9em;">（請上傳 embeddings_2d.csv）</span>
-    </div>
-
     <div class="chart-container">
         <svg id="scatter-plot"></svg>
         <div id="minimap-container" class="minimap">
@@ -276,43 +270,56 @@
             updateChart(); // 重繪圖表以顯示/隱藏熱力圖
         });
 
-        // ====== 新增：CSV 檔案上傳功能 ======
-        const csvUploadInput = document.getElementById("csv-upload");
-        csvUploadInput.addEventListener("change", function(event) {
-            const file = event.target.files[0];
-            if (!file) {
-                return;
-            }
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const csvText = e.target.result;
+        async function loadData() {
+            try {
+                const response = await fetch("embeddings_2d.csv");
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const csvText = await response.text();
                 const data = d3.csvParse(csvText);
 
-                allData = data;
+                allData = data; // 儲存原始資料
                 data.forEach(d => {
                     d.x = +d.x;
                     d.y = +d.y;
+                    // 確保 filename 和 label 存在
                     d.filename = d.filename || "未知檔案";
                     d.label = d.label || "未知標籤";
                 });
 
+                // 初始繪圖時，預設選取所有標籤
                 activeLabels = new Set(data.map(d => d.label));
                 updateChart();
-                svg.call(zoom.transform, d3.zoomIdentity);
+                svg.call(zoom.transform, d3.zoomIdentity); // 強制初始化 zoom 狀態，確保一進入就有紅框
                 createLegend(allData);
-                createStatsBarChart(allData);
-                initializeMinimap(allData);
-                adjustBlockHeights();
+                createStatsBarChart(allData); // 載入資料後建立統計長條圖
+                initializeMinimap(allData); // 初始化小地圖
+                adjustBlockHeights(); // Adjust heights after initial drawing
+                // 確保小地圖紅框初始化
                 if (svg.node().__zoom) {
                     updateMinimapViewbox(xScale, yScale);
                 }
-            };
-            reader.readAsText(file);
-        });
+            } catch (error) {
+                console.error("載入CSV檔案時發生詳細錯誤:", error); // 印出更詳細的錯誤物件
+                let errorMsg = "無法載入資料。請檢查 embeddings_2d.csv 是否存在。";
+                if (error.message.includes("NetworkError") || error.message.includes("Failed to fetch")) {
+                    errorMsg = "無法載入資料：網路錯誤或檔案未找到。請確保 'embeddings_2d.csv' 與 index.html 在同一目錄下，且瀏覽器有權限讀取本地檔案。";
+                } else if (error.message) {
+                    errorMsg += " 錯誤訊息: " + error.message;
+                }
+                
+                g.append("text")
+                    .attr("x", width / 2)
+                    .attr("y", height / 2)
+                    .attr("text-anchor", "middle")
+                    .style("font-size", "14px")
+                    .text(errorMsg)
+                    .call(wrapText, width - 20);
+            }
+        }
 
-        // ====== 移除自動載入資料功能 ======
-        // async function loadData() { ... }
-        // loadData(); // 不再自動載入，改為上傳後載入
+        loadData(); // Call the new async function to load data
 
         // 新增文字自動換行輔助函式
         function wrapText(text, maxWidth) {
